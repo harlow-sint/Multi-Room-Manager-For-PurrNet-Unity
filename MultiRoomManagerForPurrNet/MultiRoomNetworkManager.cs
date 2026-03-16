@@ -15,8 +15,20 @@ public class MultiRoomNetworkManager : MonoBehaviour
     public int maxRoomNameLength = 64;
     public int maxRoomDataLength = 256;
     public int maxPlayersPerRoom = 32;
+    public int maxTotalRooms = 50;
+    public float createRoomCooldown = 5f;
+    public float joinRoomCooldown = 2f;
+    public float roomListCooldown = 1f;
+    public float leaveRoomCooldown = 1f;
+    public bool allowJoinInProgress = true;
 
     public Dictionary<string, RoomInfo> rooms = new();
+
+    public enum RoomState
+    {
+        InProgress,
+        Ended
+    }
 
     public class RoomInfo
     {
@@ -26,6 +38,8 @@ public class MultiRoomNetworkManager : MonoBehaviour
         public int currentPlayers;
         public int maxPlayers;
         public SceneID scene;
+        public PlayerID roomMaster;
+        public RoomState state;
         public List<PlayerID> playerConnections = new List<PlayerID>();
     }
 
@@ -43,6 +57,9 @@ public class MultiRoomNetworkManager : MonoBehaviour
     // when two rooms try to load simultaneously
     private readonly Queue<(PlayerID player, CreateRoomMessage msg)> _roomCreationQueue = new();
     private bool _isCreatingRoom;
+
+    // tracks last time each player sent each message type
+    private readonly Dictionary<PlayerID, Dictionary<System.Type, float>> _playerMessageTimestamps = new();
 
 
     private void Awake()
@@ -62,6 +79,7 @@ public class MultiRoomNetworkManager : MonoBehaviour
         networkManager.Subscribe<RoomListRequestMessage>(OnRoomListRequest, asServer: true);
         networkManager.Subscribe<CreateRoomMessage>(OnCreateRoom, asServer: true);
         networkManager.Subscribe<JoinRoomMessage>(OnJoinRoom, asServer: true);
+        networkManager.Subscribe<LeaveRoomMessage>(OnLeaveRoom, asServer: true);
     }
 
     private void OnDestroy()
@@ -74,6 +92,24 @@ public class MultiRoomNetworkManager : MonoBehaviour
         networkManager.Unsubscribe<RoomListRequestMessage>(OnRoomListRequest, asServer: true);
         networkManager.Unsubscribe<CreateRoomMessage>(OnCreateRoom, asServer: true);
         networkManager.Unsubscribe<JoinRoomMessage>(OnJoinRoom, asServer: true);
+        networkManager.Unsubscribe<LeaveRoomMessage>(OnLeaveRoom, asServer: true);
+    }
+
+    private bool IsRateLimited(PlayerID player, System.Type msgType, float cooldown)
+    {
+        float now = Time.unscaledTime;
+
+        if (!_playerMessageTimestamps.TryGetValue(player, out var timestamps))
+        {
+            timestamps = new Dictionary<System.Type, float>();
+            _playerMessageTimestamps[player] = timestamps;
+        }
+
+        if (timestamps.TryGetValue(msgType, out float lastTime) && now - lastTime < cooldown)
+            return true;
+
+        timestamps[msgType] = now;
+        return false;
     }
 
     private void NetworkManager_onPlayerJoined(PlayerID player, bool isReconnect, bool asServer)
@@ -94,22 +130,34 @@ public class MultiRoomNetworkManager : MonoBehaviour
         if (!asServer) return;
 
         _connectedPlayers.Remove(player);
+        _playerMessageTimestamps.Remove(player);
 
         // if they had a pending room creation in the queue, clean it up
         // so the room name doesn't stay locked and we don't waste a scene load
         CleanupPlayerFromQueue(player);
 
-        if (playerToRoom.TryGetValue(player, out RoomInfo info))
-        {
-            info.currentPlayers--;
-            info.playerConnections.Remove(player);
-            playerToRoom.Remove(player);
+        RemovePlayerFromRoom(player);
+    }
 
-            if (info.currentPlayers <= 0)
-            {
-                StartCoroutine(UnloadEmptyScene(info.scene));
-                rooms.Remove(info.roomName);
-            }
+    private void RemovePlayerFromRoom(PlayerID player)
+    {
+        if (!playerToRoom.TryGetValue(player, out RoomInfo info))
+            return;
+
+        info.currentPlayers--;
+        info.playerConnections.Remove(player);
+        playerToRoom.Remove(player);
+
+        // if the room master left, promote the next player or close the room
+        if (info.roomMaster.Equals(player) && info.currentPlayers > 0)
+        {
+            info.roomMaster = info.playerConnections[0];
+        }
+
+        if (info.currentPlayers <= 0)
+        {
+            StartCoroutine(UnloadEmptyScene(info.scene));
+            rooms.Remove(info.roomName);
         }
     }
 
@@ -151,6 +199,8 @@ public class MultiRoomNetworkManager : MonoBehaviour
 
     private void OnRoomListRequest(PlayerID player, RoomListRequestMessage msg, bool asServer)
     {
+        if (IsRateLimited(player, typeof(RoomListRequestMessage), roomListCooldown)) return;
+
         int n = rooms.Count;
         var resp = new RoomListResponseMessage
         {
@@ -158,7 +208,8 @@ public class MultiRoomNetworkManager : MonoBehaviour
             roomDatas = new string[n],
             sceneNames = new string[n],
             currentCounts = new int[n],
-            maxCounts = new int[n]
+            maxCounts = new int[n],
+            joinableFlags = new bool[n]
         };
 
         int i = 0;
@@ -169,6 +220,8 @@ public class MultiRoomNetworkManager : MonoBehaviour
             resp.sceneNames[i] = r.sceneName;
             resp.currentCounts[i] = r.currentPlayers;
             resp.maxCounts[i] = r.maxPlayers;
+            resp.joinableFlags[i] = r.currentPlayers < r.maxPlayers
+                && (allowJoinInProgress || r.state != RoomState.InProgress);
             i++;
         }
 
@@ -178,6 +231,8 @@ public class MultiRoomNetworkManager : MonoBehaviour
     private void OnCreateRoom(PlayerID player, CreateRoomMessage msg, bool asServer)
     {
         if (!asServer) return;
+        if (IsRateLimited(player, typeof(CreateRoomMessage), createRoomCooldown)) return;
+
         if (playerToRoom.ContainsKey(player))
         {
             Debug.LogWarning($"[Server] Player {player} already in room; create ignored.");
@@ -217,6 +272,12 @@ public class MultiRoomNetworkManager : MonoBehaviour
             return;
         }
 
+        if (rooms.Count + _pendingRoomNames.Count >= maxTotalRooms)
+        {
+            Debug.LogWarning($"[Server] Room limit reached ({maxTotalRooms}); ignoring create from {player}.");
+            return;
+        }
+
         _pendingRoomNames.Add(msg.roomName);
         _roomCreationQueue.Enqueue((player, msg));
 
@@ -227,14 +288,62 @@ public class MultiRoomNetworkManager : MonoBehaviour
     private void OnJoinRoom(PlayerID player, JoinRoomMessage msg, bool asServer)
     {
         if (!asServer) return;
+        if (IsRateLimited(player, typeof(JoinRoomMessage), joinRoomCooldown)) return;
         if (playerToRoom.ContainsKey(player)) return;
 
-        if (!rooms.TryGetValue(msg.roomName, out var info) || info.currentPlayers >= info.maxPlayers) return;
+        if (!rooms.TryGetValue(msg.roomName, out var info)) return;
+        if (info.currentPlayers >= info.maxPlayers) return;
+        if (!allowJoinInProgress && info.state == RoomState.InProgress) return;
 
         networkManager.scenePlayersModule.MovePlayerToSingleScene(player, info.scene);
         playerToRoom[player] = info;
         info.currentPlayers++;
         info.playerConnections.Add(player);
+    }
+
+    private void OnLeaveRoom(PlayerID player, LeaveRoomMessage msg, bool asServer)
+    {
+        if (!asServer) return;
+        if (IsRateLimited(player, typeof(LeaveRoomMessage), leaveRoomCooldown)) return;
+        if (!playerToRoom.ContainsKey(player)) return;
+
+        RemovePlayerFromRoom(player);
+    }
+
+    public void CloseRoom(string roomName, string reason = "Room closed")
+    {
+        if (!rooms.TryGetValue(roomName, out var info)) return;
+
+        var closedMsg = new RoomClosedMessage { reason = reason };
+
+        for (int i = info.playerConnections.Count - 1; i >= 0; i--)
+        {
+            var player = info.playerConnections[i];
+            networkManager.Send(player, closedMsg);
+            playerToRoom.Remove(player);
+        }
+
+        info.playerConnections.Clear();
+        info.currentPlayers = 0;
+
+        StartCoroutine(UnloadEmptyScene(info.scene));
+        rooms.Remove(roomName);
+    }
+
+    public void SetRoomState(string roomName, RoomState state)
+    {
+        if (rooms.TryGetValue(roomName, out var info))
+            info.state = state;
+    }
+
+    public RoomInfo GetPlayerRoom(PlayerID player)
+    {
+        return playerToRoom.TryGetValue(player, out var info) ? info : null;
+    }
+
+    public bool IsRoomMaster(PlayerID player)
+    {
+        return playerToRoom.TryGetValue(player, out var info) && info.roomMaster.Equals(player);
     }
 
     IEnumerator ProcessRoomCreationQueue()
@@ -276,7 +385,9 @@ public class MultiRoomNetworkManager : MonoBehaviour
             sceneName = msg.sceneName,
             currentPlayers = 0,
             maxPlayers = msg.maxPlayers,
-            scene = sceneID
+            scene = sceneID,
+            roomMaster = player,
+            state = RoomState.InProgress
         };
 
         networkManager.scenePlayersModule.MovePlayerToSingleScene(player, sceneID);

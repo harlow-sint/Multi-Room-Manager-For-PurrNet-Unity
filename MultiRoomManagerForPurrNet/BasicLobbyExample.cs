@@ -27,11 +27,13 @@ public class BasicLobbyExample : MonoBehaviour
     void Start()
     {
         MultiRoomNetworkManager.networkManager.Subscribe<RoomListResponseMessage>(OnRoomList, asServer: false);
+        MultiRoomNetworkManager.networkManager.Subscribe<RoomClosedMessage>(OnRoomClosed, asServer: false);
     }
 
     void OnDestroy()
     {
         MultiRoomNetworkManager.networkManager.Unsubscribe<RoomListResponseMessage>(OnRoomList, asServer: false);
+        MultiRoomNetworkManager.networkManager.Unsubscribe<RoomClosedMessage>(OnRoomClosed, asServer: false);
     }
 
     void OnGUI()
@@ -99,10 +101,21 @@ public class BasicLobbyExample : MonoBehaviour
         foreach (var e in rooms)
         {
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button($"Join {e.name} ({e.cur}/{e.max})", _w200))
+
+            string label = $"Join {e.name} ({e.cur}/{e.max})";
+            if (e.joinable)
             {
-                MultiRoomNetworkManager.networkManager.SendToServer(new JoinRoomMessage { roomName = e.name });
-                Destroy(this.gameObject);
+                if (GUILayout.Button(label, _w200))
+                {
+                    MultiRoomNetworkManager.networkManager.SendToServer(new JoinRoomMessage { roomName = e.name });
+                    Destroy(this.gameObject);
+                }
+            }
+            else
+            {
+                GUI.enabled = false;
+                GUILayout.Button(label, _w200);
+                GUI.enabled = true;
             }
 
             GUILayout.Label("Data: " + e.data);
@@ -113,8 +126,9 @@ public class BasicLobbyExample : MonoBehaviour
         GUILayout.EndArea();
     }
 
-    struct Entry { public string name, data, scene; public int cur, max; }
+    struct Entry { public string name, data, scene; public int cur, max; public bool joinable; }
     List<Entry> rooms = new List<Entry>();
+
     void OnRoomList(PlayerID sender, RoomListResponseMessage msg, bool asServer)
     {
         rooms.Clear();
@@ -128,8 +142,14 @@ public class BasicLobbyExample : MonoBehaviour
                 data = msg.roomDatas[i],
                 scene = msg.sceneNames[i],
                 cur = msg.currentCounts[i],
-                max = msg.maxCounts[i]
+                max = msg.maxCounts[i],
+                joinable = msg.joinableFlags[i]
             });
         }
+    }
+
+    void OnRoomClosed(PlayerID sender, RoomClosedMessage msg, bool asServer)
+    {
+        Debug.Log($"Room closed: {msg.reason}");
     }
 }

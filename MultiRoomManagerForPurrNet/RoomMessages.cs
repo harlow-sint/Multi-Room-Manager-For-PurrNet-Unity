@@ -8,6 +8,7 @@ public struct RoomListResponseMessage : IPackedAuto
     public string[] sceneNames;
     public int[] currentCounts;
     public int[] maxCounts;
+    public bool[] joinableFlags;
 }
 
 public struct CreateRoomMessage : IPackedAuto
@@ -21,4 +22,11 @@ public struct CreateRoomMessage : IPackedAuto
 public struct JoinRoomMessage : IPackedAuto
 {
     public string roomName;
+}
+
+public struct LeaveRoomMessage : IPackedAuto { }
+
+public struct RoomClosedMessage : IPackedAuto
+{
+    public string reason;
 }
