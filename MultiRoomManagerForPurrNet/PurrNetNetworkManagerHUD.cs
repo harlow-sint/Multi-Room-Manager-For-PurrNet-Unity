@@ -97,19 +97,22 @@ public class PurrNetNetworkManagerHUD : MonoBehaviour
             }
         }
     }
+
     void SetTransportSettings()
     {
+        if (!ushort.TryParse(portInput, out ushort port)) return;
+
         if (InstanceHandler.NetworkManager.transport != null)
         {
             if (InstanceHandler.NetworkManager.transport is WebTransport webTransport)
             {
                 webTransport.address = addressInput;
-                webTransport.serverPort = ushort.Parse(portInput);
+                webTransport.serverPort = port;
             }
             else if (InstanceHandler.NetworkManager.transport is UDPTransport udpTransport)
             {
                 udpTransport.address = addressInput;
-                udpTransport.serverPort = ushort.Parse(portInput);
+                udpTransport.serverPort = port;
             }
         }
     }

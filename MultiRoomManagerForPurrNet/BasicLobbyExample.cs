@@ -12,6 +12,13 @@ public class BasicLobbyExample : MonoBehaviour
     const int panelWidth = 340;
     const int marginRight = 10;
 
+    // cached to avoid per-frame GUILayoutOption allocations
+    static readonly GUILayoutOption _w120 = GUILayout.Width(120);
+    static readonly GUILayoutOption _w200 = GUILayout.Width(200);
+    static readonly GUILayoutOption _w100 = GUILayout.Width(100);
+    static readonly GUILayoutOption _w150 = GUILayout.Width(150);
+    static readonly GUILayoutOption _h20 = GUILayout.Height(20);
+
     void OnEnable()
     {
         nameField = "Room " + Random.Range(100, 999).ToString();
@@ -39,32 +46,32 @@ public class BasicLobbyExample : MonoBehaviour
 
         int baseX = Screen.width - panelWidth - marginRight;
         GUILayout.BeginArea(new Rect(baseX, 10, panelWidth, Screen.height - 10));
-        GUILayout.Label("Create Room", GUILayout.Height(20));
+        GUILayout.Label("Create Room", _h20);
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Room Name", GUILayout.Width(120));
-        nameField = GUILayout.TextField(nameField, GUILayout.Width(200));
+        GUILayout.Label("Room Name", _w120);
+        nameField = GUILayout.TextField(nameField, _w200);
         GUILayout.EndHorizontal();
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Room Data", GUILayout.Width(120));
-        dataField = GUILayout.TextField(dataField, GUILayout.Width(200));
+        GUILayout.Label("Room Data", _w120);
+        dataField = GUILayout.TextField(dataField, _w200);
         GUILayout.EndHorizontal();
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Room Scene", GUILayout.Width(120));
-        sceneField = GUILayout.TextField(sceneField, GUILayout.Width(200));
+        GUILayout.Label("Room Scene", _w120);
+        sceneField = GUILayout.TextField(sceneField, _w200);
         GUILayout.EndHorizontal();
 
         GUILayout.BeginHorizontal();
-        GUILayout.Label("Max Players", GUILayout.Width(120));
-        maxField = GUILayout.TextField(maxField, GUILayout.Width(200));
+        GUILayout.Label("Max Players", _w120);
+        maxField = GUILayout.TextField(maxField, _w200);
         GUILayout.EndHorizontal();
 
         GUILayout.Space(10);
 
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Create Room", GUILayout.Width(100)))
+        if (GUILayout.Button("Create Room", _w100))
         {
             if (int.TryParse(maxField, out int m))
             {
@@ -81,18 +88,18 @@ public class BasicLobbyExample : MonoBehaviour
             Destroy(this.gameObject);
         }
 
-        if (GUILayout.Button("Refresh Room List", GUILayout.Width(150)))
+        if (GUILayout.Button("Refresh Room List", _w150))
         {
             MultiRoomNetworkManager.networkManager.SendToServer(new RoomListRequestMessage());
         }
         GUILayout.EndHorizontal();
 
         GUILayout.Space(20);
-        GUILayout.Label("Room List", GUILayout.Height(20));
+        GUILayout.Label("Room List", _h20);
         foreach (var e in rooms)
         {
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button($"Join {e.name} ({e.cur}/{e.max})", GUILayout.Width(200)))
+            if (GUILayout.Button($"Join {e.name} ({e.cur}/{e.max})", _w200))
             {
                 MultiRoomNetworkManager.networkManager.SendToServer(new JoinRoomMessage { roomName = e.name });
                 Destroy(this.gameObject);
